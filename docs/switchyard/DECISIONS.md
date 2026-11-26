@@ -1,0 +1,33 @@
+# Switchyard: decisions
+
+Each row is a default Shane can change. New rows take the next number. Rows are never renumbered or deleted. A
+reversed decision gets a new row that names the one it replaces.
+
+## 2026-11-26: PRD and kickoff kit (unattended run, Shane away)
+
+| ID | Problem | Options | Decision | Change it |
+|---|---|---|---|---|
+| D-001 | The task says to `add_repo` with push access before cloning. That tool was not available in the session | (a) stop, (b) carry on because the repo was already in the session's scope and a push to it worked | **(b)**. The Step 0 push to `main` succeeded, which is the thing `add_repo` was for | none needed |
+| D-002 | "Docs only on `prd`": do data fixtures, `pyproject.toml` and the CI workflow count as docs? | (a) commit them now, (b) specify them in full in the docs and let Phase 1 create them | **(b)**. The catalog, policy and CI content are written out in the PRD and `PHASE-1-PLAN.md`. `prd` holds markdown only | commit them on `prd` if you would rather review the data files first |
+| D-003 | Money unit and rounding | (a) float dollars, (b) integer cents, (c) integer micro-dollars with prices per 1M tokens | **(c)**, as chosen by Shane. Cost is one ceiling over the sum of input and output for an attempt, so the ledger never under-records. Error is under 1 µUSD per attempt | PRD 3.1. Round-half-up is the other reasonable rule |
+| D-004 | Provider and model names | (a) real vendor names with made-up prices, (b) fictional names | **(b)**: `alder`, `birch`, `cedar`. A real name next to an invented price reads as a claim | rename in the catalog file |
+| D-005 | Which rule wins when several match | (a) first in file order, (b) most specific | **(a)**, with a required catch-all last rule. A reader can find the winner by reading down the file | PRD 4.1 |
+| D-006 | Order of the fallback chain | (a) cheapest worst-case first within a tier, tiers in the rule's order, (b) an explicit model list per rule | **(a)**. Adding a model to the catalog needs no rule edit. Ties break on model id | add an optional explicit `models` list to a rule |
+| D-007 | What `max_cost_micro` bounds | (a) the worst case of one attempt, (b) the whole request | **(a)**. It is known before the call. The whole request is bounded by `max_attempts * max_cost_micro`, and the PRD says so | PRD 4.1 |
+| D-008 | Latency limit: declared or measured latency | (a) declared, (b) measured | **(a)**. Routing stays a pure function. The same limit is the per-attempt timeout | PRD Q10 |
+| D-009 | Breaker shape | (a) consecutive failures, (b) failure rate over a time window with a minimum call count | **(b)**, one breaker per provider, one probe in half-open, constant open time | `engine.breaker` block in the policy file; PRD Q7, Q12 |
+| D-010 | How to stop retry storms | (a) per-request retry cap only, (b) plus a per-provider retry budget (retries as a share of first attempts in a window) | **(b)**. No jitter in Phase 1 so examples stay readable | `engine.retry_budget`; PRD Q8 |
+| D-011 | Which errors retry, and whether failures cost money | | `timeout`, `server_error`, `rate_limited` retry and count against health. `bad_request` ends the request and does not touch health. A failed attempt costs 0 unless its script bills tokens | PRD 5.1 |
+| D-012 | Reserve per request or per attempt | (a) one hold per request covering every possible attempt, (b) a hold per attempt at that model's worst-case cost | **(b)**. Tight holds, closed quickly. A request can be denied part-way through a fallback chain if the budget runs out, and earlier charges stand | PRD Q1. **Shane to confirm** |
+| D-013 | Ledger entry kinds | (a) `reserve` and `settle` only, (b) plus `release` and `adjustment` | **(b)**. `adjustment` gives corrections and opening balances without editing history. `release` closes a stale hold. Accounting time of an attempt is its reserve time | PRD 6.1, Q11 |
+| D-014 | Overage behaviour details | | `deny` ends the request. `downgrade` happens once per request, never below the rule's `min_tier`. `allow_with_flag` must have a cap (`overage_cap_micro`) | PRD 6.3, Q4. **Shane to confirm the cap** |
+| D-015 | Budget period | (a) UTC calendar month, (b) configurable time zone, (c) rolling 30 days | **(a)**, no carry-over | PRD Q3. **Shane to confirm** |
+| D-016 | Cache rules beyond the brief | | Key includes a hash of policy plus catalog. Scope is one team. Only `temperature "0"` is cached. A downgraded or lower-tier answer is not stored. A hit is free and is served even at the hard limit | PRD 7.1, Q5, Q6. **Shane to confirm** |
+| D-017 | How Phase 1 shows concurrency with no server | (a) a discrete-event simulator, (b) sequential requests plus explicit interleaved reserve/settle schedules, a hypothesis test over interleavings and a threaded ledger test | **(b)**. The overspend risk lives in the ledger, and the ledger can be tested directly | `fixtures/README.md`, case kind `interleaved` |
+| D-018 | Does Phase 1 include a CLI? | (a) library only, (b) a small typer CLI (`replay`, `explain`, `report`) | **(b)**. It mirrors Yardstick and gives a way to see a case run. It is not an HTTP server | drop `cli.py` and the `typer` pin |
+| D-019 | Dependencies | (a) copy all of Yardstick's, (b) copy only what Switchyard uses, at Yardstick's pinned versions | **(b)**: pydantic, typer, pyyaml, and the dev tools. No jinja2 or jsonschema until something needs them | `PHASE-1-PLAN.md` |
+| D-020 | Does the trace hold message text? | (a) yes, (b) no, only the cache key hash | **(b)**. A cost trace should not become a second copy of user data | PRD 8.1 |
+| D-021 | Shape of the Yardstick hand-off | (a) Switchyard imports Yardstick, (b) CI runs Yardstick's `http` target against the Phase 2 gateway and reads its exit code | **(b)**. The two tools stay separate. Design only. The PRD says plainly that fakes cannot show answer quality | PRD 9 |
+| D-022 | Build-log number and license | | Neither was given. No number is stated. No `LICENSE` file is added and `pyproject.toml` has no license field | **Shane to decide** (Yardstick is MIT, copyright Lab Intelligence, LLC) |
+| D-023 | Which branch Phase 1 starts from | (a) `main`, (b) `prd` while the kit pull request is unmerged | **(b)**: branch `phase-1` from `prd`, draft pull request against `prd`, so it never touches `main`. If the kit is merged first, branch from `main` | `NEXT.md`. The Phase 1 run's own prompt wins where it differs |
+| D-024 | How the worked-example numbers were checked | | A throwaway script in the run's sandbox computed all 30. It is not committed, because `prd` is docs only. Phase 1's golden tests are the real check | see "Not verified" in the pull request |
