@@ -292,14 +292,23 @@ class Engine:
             elif is_retry:
                 retry_budget.note_retry(now)
                 retries_on[provider] = retries_on.get(provider, 0) + 1
-            result = self.providers[provider].call(
-                model,
-                request,
-                now,
-                decision.max_latency_ms,
-                fake_output_tokens,
-                key.removeprefix("sha256:")[:12],
-            )
+            try:
+                result = self.providers[provider].call(
+                    model,
+                    request,
+                    now,
+                    decision.max_latency_ms,
+                    fake_output_tokens,
+                    key.removeprefix("sha256:")[:12],
+                )
+            except Exception:
+                # A broken adapter (e.g. an invalid fake script) is a programming error, not an outcome.
+                # Close the hold and give the breaker permit back so nothing leaks, then re-raise.
+                self.ledger.release(
+                    request.request_id, attempt_no, now, memo="provider adapter raised; no call was made"
+                )
+                breaker.cancel(is_probe=allow.is_probe)
+                raise
             self.clock.advance(result.latency_ms)
             finished = self.clock.now_ms()
             cost = cost_micro(

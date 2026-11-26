@@ -40,7 +40,7 @@ from switchyard.models import (
     Trace,
 )
 from switchyard.money import Micro, SignedMicro, cost_micro
-from switchyard.providers.fake import FakeProvider, ScriptWindow
+from switchyard.providers.fake import FakeProvider, ScriptError, ScriptWindow
 from switchyard.report import daily_rows
 from switchyard.trace import Difference, reconcile
 
@@ -83,6 +83,7 @@ class RequestExpect(Frozen):
     cache: CacheStatus | None = None
     attempts: tuple[AttemptExpect, ...] | None = None
     events: tuple[str, ...] = ()
+    event_times: tuple[NonNegInt, ...] | None = None  # at_ms of each event, relative to start_at
     flags: tuple[str, ...] = ()
     cost_micro: Micro | None = None
     avoided_micro: Micro | None = None
@@ -266,6 +267,9 @@ def _check_request(
         actual = [f"{r.code}:{r.subject}" for r in trace.route.reasons] if trace.route else []
         _diff(out, label, where, "route_reasons", list(exp.route_reasons), actual)
     _diff(out, label, where, "events", list(exp.events), [e.label() for e in trace.events])
+    if exp.event_times is not None:
+        times = [e.at_ms - start_ms for e in trace.events]
+        _diff(out, label, where, "event_times", list(exp.event_times), times)
     _diff(out, label, where, "flags", sorted(exp.flags), list(trace.flags))
     if exp.cost_micro is not None:
         _diff(out, label, where, "cost_micro", exp.cost_micro, trace.cost_micro)
@@ -315,9 +319,12 @@ def _run_sequential(loaded: LoadedCase, case: SequentialCase) -> CaseResult:
                 f"{loaded.path}: {item.we}: at_ms {item.at_ms} is earlier than the previous request's finish "
                 f"({clock.now_ms() - loaded.start_ms})"
             )
-        trace = engine.handle_raw(
-            item.request, arrival_ms=arrival, fake_output_tokens=item.fake_output_tokens
-        )
+        try:
+            trace = engine.handle_raw(
+                item.request, arrival_ms=arrival, fake_output_tokens=item.fake_output_tokens
+            )
+        except ScriptError as exc:
+            raise CaseError(f"{loaded.path}: {item.we}: {exc}") from None
         _check_request(result, item.we, item, trace, engine, loaded.start_ms)
     result.traces = list(engine.traces)
     result.breakers = health.states()

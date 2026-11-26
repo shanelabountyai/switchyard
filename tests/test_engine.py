@@ -2,8 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from switchyard.breaker import BreakerError
 from switchyard.engine import Engine
-from switchyard.models import BreakerState, CacheStatus, Outcome, Request, RoutingPolicy, Status, Trace
+from switchyard.models import (
+    BreakerState,
+    CacheStatus,
+    EntryKind,
+    Outcome,
+    Request,
+    RoutingPolicy,
+    Status,
+    Trace,
+)
+from switchyard.providers.fake import ScriptError
 from tests.helpers import START_MS, engine, policy, request, team, window
 
 
@@ -217,3 +230,39 @@ def test_arrival_never_moves_the_clock_back() -> None:
     e.handle(request("r1"), arrival_ms=START_MS + 1000)
     trace = e.handle(request("r2"), arrival_ms=START_MS)
     assert trace.arrived_ms == START_MS + 1400
+
+
+def test_bad_request_in_closed_state_does_not_touch_health() -> None:
+    """AC-B6: 3 failures, a bad_request, then 1 ok must not open the breaker (bad_request is no outcome)."""
+    e = engine(
+        teams={"marketing": team()},
+        scripts={
+            "alder": [window(0, 3_000, "server_error", latency_ms=10), window(3_000, 4_000, "bad_request")]
+        },
+        the_policy=_policy(max_retries_per_provider=0),
+    )
+    shape: dict[str, Any] = {"team_name": "marketing", "app": "x", "use_case": "x", "task_class": "x"}
+    for i in range(3):
+        e.handle(request(f"f{i}", **shape), arrival_ms=START_MS + i * 1_000)
+    bad = e.handle(request("bad", **shape), arrival_ms=START_MS + 3_000)
+    assert bad.status is Status.BAD_REQUEST and len(bad.attempts) == 1
+    assert e.health.breaker("alder").state is BreakerState.CLOSED
+    ok = e.handle(request("ok", **shape), arrival_ms=START_MS + 4_000)
+    assert ok.status is Status.OK and ok.attempts[0].model == "alder-small"
+    assert e.health.breaker("alder").state is BreakerState.CLOSED  # 3 of 4 outcomes failed, last was ok
+
+
+def test_broken_script_leaks_no_hold_or_permit() -> None:
+    """Review finding: a fake script that bills more than the request allows raises, but closes its hold."""
+    e = engine(scripts={"alder": [window(0, 1_000, "server_error", billed_output_tokens=80)]})
+    with pytest.raises(ScriptError):
+        e.handle(request())
+    assert e.ledger.open_reserves() == ()
+    assert e.ledger.balance("support", "2026-11").held == 0
+    release = e.ledger.entries()[-1]
+    assert release.kind is EntryKind.RELEASE and release.memo
+    breaker = e.health.breaker("alder")
+    allow = breaker.allow(START_MS + 5_000)
+    breaker.record(Outcome.OK, START_MS + 5_000, is_probe=allow.is_probe)  # in-flight count was given back
+    with pytest.raises(BreakerError):
+        breaker.record(Outcome.OK, START_MS + 5_000, is_probe=False)

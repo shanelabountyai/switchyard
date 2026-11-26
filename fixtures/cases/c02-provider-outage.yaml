@@ -42,6 +42,7 @@ requests:
     - {model: alder-small, started_ms: 250, finished_ms: 300, outcome: server_error, reserved_micro: 120, cost_micro: 0}
     - {model: birch-small, started_ms: 300, finished_ms: 600, outcome: ok, reserved_micro: 150, cost_micro: 112}
     events: [retry, 'no_retry:per_request_retry_limit']
+    event_times: [50, 300]
     flags: [fallback_used]
     cost_micro: 112
     breakers_after: {alder: closed}
@@ -70,6 +71,7 @@ requests:
     - {model: alder-small, started_ms: 1000, finished_ms: 1050, outcome: server_error, reserved_micro: 120, cost_micro: 0}
     - {model: birch-small, started_ms: 1050, finished_ms: 1350, outcome: ok, reserved_micro: 150, cost_micro: 112}
     events: ['no_retry:retry_budget_exhausted']
+    event_times: [1050]
     flags: [fallback_used]
     cost_micro: 112
     breakers_after: {alder: closed}
@@ -97,6 +99,7 @@ requests:
     - {model: alder-small, started_ms: 2000, finished_ms: 2050, outcome: server_error, reserved_micro: 120, cost_micro: 0}
     - {model: birch-small, started_ms: 2050, finished_ms: 2350, outcome: ok, reserved_micro: 150, cost_micro: 112}
     events: [breaker_opened, 'no_retry:breaker_open']
+    event_times: [2050, 2050]
     flags: [fallback_used]
     cost_micro: 112
     breakers_after: {alder: open}
@@ -123,6 +126,7 @@ requests:
     attempts:
     - {model: birch-small, started_ms: 3000, finished_ms: 3300, outcome: ok, reserved_micro: 150, cost_micro: 112}
     events: [breaker_open_skip]
+    event_times: [3000]
     flags: [fallback_used]
     cost_micro: 112
     breakers_after: {alder: open}
@@ -150,6 +154,7 @@ requests:
     - {model: alder-small, started_ms: 13000, finished_ms: 13050, outcome: server_error, reserved_micro: 120, cost_micro: 0}
     - {model: birch-small, started_ms: 13050, finished_ms: 13350, outcome: ok, reserved_micro: 150, cost_micro: 112}
     events: [probe, breaker_opened, 'no_retry:breaker_open']
+    event_times: [13000, 13050, 13050]
     flags: [fallback_used]
     cost_micro: 112
     breakers_after: {alder: open}
@@ -176,6 +181,7 @@ requests:
     attempts:
     - {model: alder-small, started_ms: 24000, finished_ms: 24400, outcome: ok, reserved_micro: 120, cost_micro: 90}
     events: [probe, breaker_closed]
+    event_times: [24000, 24400]
     flags: []
     cost_micro: 90
     breakers_after: {alder: closed}

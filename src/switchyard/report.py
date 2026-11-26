@@ -23,7 +23,6 @@ from switchyard.models import (
     CacheStatus,
     EntryKind,
     LedgerEntry,
-    Outcome,
     ReportRow,
     Status,
     TeamConfig,
@@ -71,7 +70,7 @@ def daily_rows(
             reserve_day = day_of(by_seq[attempt.reserve_seq].ts_ms)
             cost_row = counts[(trace.team, reserve_day)]
             cost_row["attempts"] += 1
-            cost_row["failed_attempts"] += 0 if attempt.outcome is Outcome.OK else 1
+            cost_row["failed_attempts"] += 1 if attempt.outcome.is_failure else 0
             cost_row["input_tokens"] += attempt.input_tokens
             cost_row["output_tokens"] += attempt.output_tokens
             cost_row["cost_micro"] += attempt.cost_micro
@@ -141,8 +140,8 @@ _MD_COLUMNS: tuple[tuple[str, str], ...] = (
     ("cost_usd", "cost_usd"),
     ("avoided_micro", "avoided_micro (estimate, not in the ledger)"),
     ("adjustments_micro", "adjustments_micro"),
-    ("soft_limit_crossed", "requests with a reserve above the soft limit"),
-    ("over_hard_limit", "requests with a reserve above the hard limit"),
+    ("soft_limit_crossed", "requests with reserves above the soft limit"),
+    ("over_hard_limit", "requests with reserves above the hard limit"),
     ("downgraded", "downgraded"),
     ("fallback_used", "fallback_used"),
     ("spent_micro", "period-to-date spent_micro"),
@@ -177,6 +176,10 @@ def render_markdown(rows: Sequence[ReportRow], title: str = "Daily cost report")
         "  day the request arrived. Attempts, tokens and cost are counted on the UTC day of each attempt's",
         "  reserve, so a request that arrives before midnight and makes an attempt after it is a request",
         "  on the first day and a cost on the second.",
+        "- `failed_attempts` counts timeout, server_error and rate_limited attempts (PRD 5.1), not",
+        "  bad_request.",
+        "- Flag columns count requests that carried the flag. The soft and hard limit flags are set on",
+        "  reserves, so they describe holds at worst-case cost, not final spend.",
         "- `avoided_micro` is an estimate of what cache hits would have cost. It is not in the ledger.",
         "- Period-to-date `spent_micro` is for the UTC calendar month of the row, as of the end of the",
         "  row's day.",

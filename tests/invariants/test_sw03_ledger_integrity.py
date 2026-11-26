@@ -29,10 +29,7 @@ def _check(entries: tuple[LedgerEntry, ...]) -> None:
 
 def test_golden_ledgers() -> None:
     for path in CASES:
-        result = case_result(path)
-        if "c07" in path.name:
-            continue  # the interleaved case's ledger is checked by its own expectations
-        _check(result.ledger.entries())
+        _check(case_result(path).ledger.entries())
 
 
 @settings(max_examples=60, deadline=None)

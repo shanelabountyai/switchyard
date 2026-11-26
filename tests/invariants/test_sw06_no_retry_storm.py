@@ -18,7 +18,7 @@ def _in_window(times: list[int], now: int) -> int:
 
 
 @settings(max_examples=100, deadline=None)
-@given(specs(max_requests=16))
+@given(specs(max_requests=16, outage=True))
 def test_bounds(spec: Spec) -> None:
     e = run(spec)
     opened_at: dict[str, int] = {}

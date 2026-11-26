@@ -121,6 +121,8 @@ def reconcile(traces: Sequence[Trace], entries: Sequence[LedgerEntry]) -> list[D
                     trace.team,
                 ):
                     diffs.append(Difference("reserve_owner", f"{where}: seq {reserve.seq} belongs elsewhere"))
+                if attempt.period != reserve.period:
+                    diffs.append(Difference("period_mismatch", f"{where}: trace period {attempt.period}"))
                 trace_cost_by_team_period[(trace.team, reserve.period)] += attempt.cost_micro
                 trace_cost_by_team_day[(trace.team, day_of(reserve.ts_ms))] += attempt.cost_micro
             if settle is None or settle.kind is not EntryKind.SETTLE:

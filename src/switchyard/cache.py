@@ -110,6 +110,10 @@ class ExactCache:
         with self._lock:
             return len(self._teams.get(team, {}))
 
+    def keys(self, team: str) -> list[str]:
+        with self._lock:
+            return sorted(self._teams.get(team, {}))
+
     def sizes(self) -> dict[str, int]:
         with self._lock:
             return {team: len(entries) for team, entries in sorted(self._teams.items())}

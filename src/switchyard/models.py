@@ -404,7 +404,7 @@ class Trace(Frozen):
 
 class ReportRow(Frozen):
     date: Name
-    team: Name
+    team: Annotated[str, Strict()]  # "" for a malformed request with no team
     requests: NonNegInt
     ok: NonNegInt
     no_route: NonNegInt

@@ -43,6 +43,7 @@ requests:
       output_tokens: 80}
     - {model: alder-small, started_ms: 2200, finished_ms: 2600, outcome: ok, reserved_micro: 360, cost_micro: 320}
     events: [retry]
+    event_times: [2000]
     flags: []
     cost_micro: 584
 - we: WE-13

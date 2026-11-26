@@ -6,7 +6,7 @@ from switchyard.clock import parse_utc
 from switchyard.models import EntryKind
 from switchyard.report import daily_rows, render_json, render_markdown
 from switchyard.trace import ReconcileError
-from tests.helpers import FIXTURES, START_MS, case_result, engine, request, team, window
+from tests.helpers import FIXTURES, case_result, engine, request, team, window
 
 CASES_DIR = FIXTURES / "cases"
 
@@ -98,11 +98,27 @@ def test_tampered_trace_makes_the_report_refuse() -> None:
         daily_rows([tampered, *result.traces[1:]], result.ledger.entries(), result.loaded.teams)
 
 
-def test_render_labels_illustrative_and_is_stable() -> None:
+def test_render_labels_illustrative() -> None:
     result = case_result(CASES_DIR / "c02-provider-outage.yaml")
     assert result.report_rows is not None
     text = render_markdown(result.report_rows)
     assert "Illustrative prices, fake providers. Not deployed." in "\n".join(text.splitlines()[:4])
     assert "estimate, not in the ledger" in text
-    assert render_json(result.report_rows) == render_json(result.report_rows)
-    assert START_MS > 0
+    assert render_json(result.report_rows).startswith('[{"adjustments_micro":0,')
+
+
+def test_malformed_request_with_no_team_still_reports() -> None:
+    """Review finding: a malformed request with no team must not crash the report."""
+    e = engine()
+    e.handle(request("r1"))
+    e.handle_raw({"request_id": "x"})
+    rows = daily_rows(e.traces, e.ledger.entries(), e.teams)
+    blank = [r for r in rows if r.team == ""]
+    assert len(blank) == 1 and blank[0].bad_request == 1 and blank[0].hard_limit_micro is None
+
+
+def test_failed_attempts_excludes_bad_request() -> None:
+    e = engine(scripts={"alder": [window(0, 100, "bad_request")]})
+    e.handle(request("r1"))
+    (row,) = daily_rows(e.traces, e.ledger.entries(), e.teams)
+    assert (row.attempts, row.failed_attempts, row.bad_request) == (1, 0, 1)
