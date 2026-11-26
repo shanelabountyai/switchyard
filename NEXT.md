@@ -46,5 +46,5 @@ front on `127.0.0.1` per `IMPLEMENTATION_PLAN.md`. The 15 golden cases must repl
 - You: read the Phase 1 draft PR. Its body lists each acceptance item with the test that proves it.
 - You: answer D-038 and the earlier "Shane to confirm" rows. If you reverse one, name the row for the next run.
 - You: decide the build-log number and license (D-022).
-- You: when both PRs are merged, retarget nothing by hand: the Phase 1 PR's base is `prd`; after merging #1,
-  change the Phase 1 PR's base to `main` in the GitHub UI before merging it.
+- You: the Phase 1 PR's base is `prd`. After merging #1, change the Phase 1 PR's base to `main` before merging
+  it.
