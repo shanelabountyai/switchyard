@@ -1,0 +1,74 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c07-concurrent-overspend
+kind: interleaved
+illustrative: true
+description: Three triage requests interleave on the ledger. A hold blocks B, then the settle frees room for C.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+teams:
+  support:
+    budget: {period: calendar_month_utc, soft_limit_micro: 8000, hard_limit_micro: 10000, overage: deny, overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+covers: [WE-17]
+opening:
+- {team: support, amount_micro: 9790, memo: illustrative opening balance}
+steps:
+- op: reserve
+  at_ms: 0
+  team: support
+  request_id: A
+  attempt: 1
+  model: alder-small
+  input_tokens: 400
+  max_output_tokens: 50
+  expect:
+    accepted: true
+    amount_micro: 120
+    flags: [soft_limit_crossed]
+    spent_micro: 9790
+    held_micro: 120
+- op: reserve
+  at_ms: 1
+  team: support
+  request_id: B
+  attempt: 1
+  model: alder-small
+  input_tokens: 400
+  max_output_tokens: 50
+  expect: {accepted: false, amount_micro: 120, spent_micro: 9790, held_micro: 120}
+- op: settle
+  at_ms: 400
+  team: support
+  request_id: A
+  attempt: 1
+  model: alder-small
+  input_tokens: 400
+  output_tokens: 12
+  expect: {amount_micro: 90, spent_micro: 9880, held_micro: 0}
+- op: reserve
+  at_ms: 401
+  team: support
+  request_id: C
+  attempt: 1
+  model: alder-small
+  input_tokens: 400
+  max_output_tokens: 50
+  expect:
+    accepted: true
+    amount_micro: 120
+    flags: [soft_limit_crossed]
+    spent_micro: 9880
+    held_micro: 120
+- op: settle
+  at_ms: 801
+  team: support
+  request_id: C
+  attempt: 1
+  model: alder-small
+  input_tokens: 400
+  output_tokens: 12
+  expect: {amount_micro: 90, spent_micro: 9970, held_micro: 0}
+expect_end:
+  balances:
+  - {team: support, period: 2026-11, spent_micro: 9970, held_micro: 0}
+  ledger_entries: 5

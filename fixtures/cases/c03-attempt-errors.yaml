@@ -1,0 +1,79 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c03-attempt-errors
+kind: sequential
+illustrative: true
+description: A timeout that billed tokens, then a retry; then a bad_request that is never retried.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  marketing:
+    budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000, overage: deny,
+      overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+covers: [WE-12, WE-13]
+opening: []
+scripts:
+  alder:
+  - {from_ms: 0, to_ms: 2100, outcome: ok, latency_ms: 9999, billed_input_tokens: 1000, billed_output_tokens: 80}
+  - {from_ms: 10000, to_ms: 10100, outcome: bad_request, latency_ms: 30}
+requests:
+- we: WE-12
+  at_ms: 0
+  fake_output_tokens: 150
+  request:
+    request_id: r1
+    team: marketing
+    app: site
+    use_case: blurb
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative blurb text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: bypass_team_opt_out
+    attempts:
+    - {model: alder-small, started_ms: 0, finished_ms: 2000, outcome: timeout, reserved_micro: 360, cost_micro: 264, input_tokens: 1000,
+      output_tokens: 80}
+    - {model: alder-small, started_ms: 2200, finished_ms: 2600, outcome: ok, reserved_micro: 360, cost_micro: 320}
+    events: [retry]
+    flags: []
+    cost_micro: 584
+- we: WE-13
+  at_ms: 10000
+  fake_output_tokens: 150
+  request:
+    request_id: r2
+    team: marketing
+    app: site
+    use_case: blurb
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative blurb text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: bad_request
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: bypass_team_opt_out
+    attempts:
+    - {model: alder-small, started_ms: 10000, finished_ms: 10030, outcome: bad_request, reserved_micro: 360, cost_micro: 0}
+    events: []
+    flags: []
+    cost_micro: 0
+    breakers_after: {alder: closed}
+expect_end:
+  balances:
+  - {team: marketing, period: 2026-11, spent_micro: 584, held_micro: 0}
+  breakers: {alder: closed}
+  ledger_entries: 6
+  reconcile: clean

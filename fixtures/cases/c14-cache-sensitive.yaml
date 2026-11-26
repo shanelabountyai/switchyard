@@ -1,0 +1,73 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c14-cache-sensitive
+kind: sequential
+illustrative: true
+description: A tagged request is never cached, even with the team's cache on.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  marketing:
+    budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000, overage: deny,
+      overage_cap_micro: 0}
+    cache: {enabled: true, ttl_ms: 60000}
+covers: [WE-28]
+opening: []
+scripts: {}
+requests:
+- we: WE-28
+  at_ms: 0
+  fake_output_tokens: 150
+  request:
+    request_id: r1
+    team: marketing
+    app: site
+    use_case: blurb
+    task_class: summarize
+    data_tags: [pii]
+    messages:
+    - {role: user, content: Illustrative blurb text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, alder-medium]
+    cache: bypass_sensitive
+    attempts:
+    - {model: alder-small, started_ms: 0, finished_ms: 400, outcome: ok, reserved_micro: 360, cost_micro: 320}
+    events: []
+    flags: []
+    cost_micro: 320
+- we: WE-28
+  at_ms: 5000
+  fake_output_tokens: 150
+  request:
+    request_id: r2
+    team: marketing
+    app: site
+    use_case: blurb
+    task_class: summarize
+    data_tags: [pii]
+    messages:
+    - {role: user, content: Illustrative blurb text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, alder-medium]
+    cache: bypass_sensitive
+    attempts:
+    - {model: alder-small, started_ms: 5000, finished_ms: 5400, outcome: ok, reserved_micro: 360, cost_micro: 320}
+    events: []
+    flags: []
+    cost_micro: 320
+expect_end:
+  balances:
+  - {team: marketing, period: 2026-11, spent_micro: 640, held_micro: 0}
+  ledger_entries: 4
+  cache_entries: {marketing: 0}
+  reconcile: clean

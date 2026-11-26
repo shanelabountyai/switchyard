@@ -1,0 +1,73 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c15-cache-opt-out
+kind: sequential
+illustrative: true
+description: A team with the cache switched off never reads or writes it.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  legal:
+    budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000, overage: deny,
+      overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+covers: [WE-29]
+opening: []
+scripts: {}
+requests:
+- we: WE-29
+  at_ms: 0
+  fake_output_tokens: 400
+  request:
+    request_id: r1
+    team: legal
+    app: clm
+    use_case: contract-review
+    task_class: reason
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative contract text}
+    input_tokens: 2000
+    max_output_tokens: 500
+    temperature: '0'
+  expect:
+    status: ok
+    rule: legal-review
+    chain: [cedar-large, alder-large]
+    cache: bypass_team_opt_out
+    attempts:
+    - {model: cedar-large, started_ms: 0, finished_ms: 2500, outcome: ok, reserved_micro: 40000, cost_micro: 36000}
+    events: []
+    flags: []
+    cost_micro: 36000
+- we: WE-29
+  at_ms: 5000
+  fake_output_tokens: 400
+  request:
+    request_id: r2
+    team: legal
+    app: clm
+    use_case: contract-review
+    task_class: reason
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative contract text}
+    input_tokens: 2000
+    max_output_tokens: 500
+    temperature: '0'
+  expect:
+    status: ok
+    rule: legal-review
+    chain: [cedar-large, alder-large]
+    cache: bypass_team_opt_out
+    attempts:
+    - {model: cedar-large, started_ms: 5000, finished_ms: 7500, outcome: ok, reserved_micro: 40000, cost_micro: 36000}
+    events: []
+    flags: []
+    cost_micro: 36000
+expect_end:
+  balances:
+  - {team: legal, period: 2026-11, spent_micro: 72000, held_micro: 0}
+  ledger_entries: 4
+  cache_entries: {legal: 0}
+  reconcile: clean
