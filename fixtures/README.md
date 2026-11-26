@@ -38,7 +38,7 @@ The golden test runs the case and compares every expected value. Times are milli
 | `c14-cache-sensitive` | sequential | WE-28 | A tagged request is never cached |
 | `c15-cache-opt-out` | sequential | WE-29 | A team with the cache switched off |
 
-Defaults for every case unless its file says otherwise: `start_at: "2026-11-02T09:00:00.000Z"`; budgets far from
+What the case files contain unless the table in PRD section 11 says otherwise (each file writes these out; the loader has no defaults): `start_at: "2026-11-02T09:00:00.000Z"`; budgets far from
 their limits (soft and hard both `1000000000000`, `deny`); cache **off** for every team. Cases `c08`, `c13` and
 `c14` turn the cache on with `ttl_ms: 60000`. `c11` starts at `2026-11-30T23:59:59.000Z` and `c12` at
 `2026-11-30T23:59:59.900Z`.
@@ -61,7 +61,8 @@ teams:
     budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000,
              overage: deny, overage_cap_micro: 0}
     cache: {enabled: false, ttl_ms: 60000}
-opening: []            # optional: [{team, period, amount_micro, memo}] written as ledger adjustments
+covers: [WE-06, WE-07, WE-08, WE-09, WE-10, WE-11, WE-30]
+opening: []            # optional: [{team, amount_micro, memo}], written as ledger adjustments at start_at
 scripts:
   alder:
     - {from_ms: 0, to_ms: 20000, outcome: server_error, latency_ms: 50}
@@ -92,6 +93,8 @@ requests:
       events: [retry, no_retry:per_request_retry_limit]
       flags: [fallback_used]
       cost_micro: 112
+      breakers_after: {alder: closed}                       # optional
+      balance_after: {spent_micro: 112, held_micro: 0}      # optional; the request's team, period of arrival
   # … WE-07 to WE-11
 expect_end:
   balances:
@@ -114,7 +117,18 @@ Rules for the file:
 - A latency above the attempt timeout turns the outcome into `timeout` after exactly the timeout. WE-12 uses
   `{from_ms: 0, to_ms: 2100, outcome: ok, latency_ms: 9999, billed_input_tokens: 1000, billed_output_tokens: 80}`.
 - `fake_output_tokens`: what a successful call returns, capped at `max_output_tokens`.
-- `expect.events` lists event codes in order, with `no_retry` written as `no_retry:<reason>`. `expect.route_reasons`
+- `covers` is required in every case of either kind. A test checks that each ID from WE-01 to WE-30 is covered
+  by exactly one case. `we:` on a request is a label for people and may repeat (WE-22, WE-28 and WE-29 are two
+  requests each).
+- Every team a case uses is written out under `teams`. A team that is not listed has no config, and its requests
+  end `unknown_team`.
+- `expect.flags` is the complete set. `[]` or a missing key means no flags.
+- `expect.events` lists every event code in order, with `no_retry` written as `no_retry:<reason>` and
+  `budget_refused` as `budget_refused:<amount>`. The codes are in PRD section 8.1. For the outage case they are:
+  WE-06 `[retry, no_retry:per_request_retry_limit]`; WE-07 `[no_retry:retry_budget_exhausted]`; WE-08
+  `[breaker_opened, no_retry:breaker_open]`; WE-09 `[breaker_open_skip]`; WE-10 `[probe, breaker_opened,
+  no_retry:breaker_open]`; WE-11 `[probe, breaker_closed]`.
+- `c01` requests arrive at `at_ms` 0, 1000, 2000, 3000 and 4000 in WE order. `expect.route_reasons`
   is optional and, where present, lists `code:subject` in order (for example `excluded_cost:birch-medium`). It is
   present for WE-01 to WE-05, WE-18 and WE-21.
 - Every money value is a whole number of micro-dollars. A float anywhere in a case file is a load error.
@@ -138,7 +152,8 @@ teams:
              overage: deny, overage_cap_micro: 0}
     cache: {enabled: false, ttl_ms: 60000}
 opening:
-  - {team: support, period: "2026-11", amount_micro: 9790, memo: "illustrative opening balance"}
+  - {team: support, amount_micro: 9790, memo: "illustrative opening balance"}
+covers: [WE-17]
 steps:
   - {op: reserve, at_ms: 0, team: support, request_id: A, attempt: 1, model: alder-small, input_tokens: 400, max_output_tokens: 50,
      expect: {accepted: true, amount_micro: 120, flags: [soft_limit_crossed], spent_micro: 9790, held_micro: 120}}
@@ -156,7 +171,8 @@ expect_end:
   ledger_entries: 5      # 1 adjustment, 2 reserves, 2 settles. The refused reserve writes nothing.
 ```
 
-`spent_micro` and `held_micro` in an `expect` block are the balances **after** the step.
+`spent_micro` and `held_micro` in an `expect` block are the balances **after** the step. This case tests the
+ledger only. The engine producing `denied_budget` from a refused reserve is covered by WE-15.
 
 ## Adding a case
 

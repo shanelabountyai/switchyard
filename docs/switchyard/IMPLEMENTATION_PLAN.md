@@ -48,7 +48,8 @@ the PRD table before the engine, so the engine is built against them.
   `failed_exhausted` 503, `bad_request` 400, `unknown_team` 403.
 - The ledger and traces are also written as JSON Lines files. Real concurrency arrives here, so the ledger lock
   and the half-open probe permit are exercised by concurrent HTTP tests.
-- The framework and its pinned version are chosen in `PHASE-2-PLAN.md` with a `DECISIONS.md` row. Tests use an
+- The framework and its pinned version are chosen in `PHASE-2-PLAN.md` with a `DECISIONS.md` row. The HTTP code
+  lives in one `server` package, the only place SW-09 lets a network module be imported. Tests use an
   in-process client. CI makes no external request.
 
 **Exit gate.** The 15 golden cases replayed through HTTP give the same traces and ledger as Phase 1 (clock still

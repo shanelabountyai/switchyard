@@ -88,7 +88,9 @@ addopts = "-q"
 ```
 
 Run `uv lock` once and commit `uv.lock`. If a pin does not resolve, stop and report the resolver's message, or
-change that one pin and record it in `DECISIONS.md`. `.gitignore` copies Yardstick's and adds `runs/`.
+change that one pin and record it in `DECISIONS.md`. `.gitignore` copies Yardstick's and adds `runs/`. The root
+`README.md` that `readme` points at already exists (the placeholder from `main`). Leave its wording alone in
+Phase 1 apart from a status line, if any.
 
 ## 3. CI (`.github/workflows/ci.yml`)
 
@@ -132,7 +134,7 @@ rule the module implements. The PRD wins if this plan and the PRD disagree; reco
 ### `money.py`
 
 - **In / out.** `cost_micro(input_tokens: int, output_tokens: int, input_price: int, output_price: int) -> int`
-  (PRD 3.1). `format_usd(micro: int) -> str`. A `Micro` annotated type (strict `int`, `>= 0` where used for
+  (PRD 3.1). `format_usd(micro: int) -> str` and its exact inverse `parse_usd(text: str) -> int`. A `Micro` annotated type (strict `int`, `>= 0` where used for
   prices, limits and costs) for pydantic models.
 - **Invariants.** Result is an `int`. `cost * 1_000_000 >= exact numerator > (cost - 1) * 1_000_000`. Monotonic
   in both token counts. `format_usd` never uses float and round-trips through `parse_usd`.
@@ -190,7 +192,9 @@ rule the module implements. The PRD wins if this plan and the PRD disagree; reco
   `note_first_attempt(now)`, `note_retry(now)`, `can_retry(now) -> bool`. `Health` holds one of each per provider
   (created on first use, iterated in provider-id order). A lock guards each object (PRD 5.2, 5.3).
 - **Invariants.** AC-B2, AC-B3, AC-B5. State only changes inside `allow` and `record`. `record` without a
-  matching `allow` raises.
+  matching `allow` raises. `record` while `open` (possible only with overlapping calls) adds the outcome and
+  changes nothing else. `allow` and `record` return the state change, if any, so the engine can write the
+  `probe`, `breaker_opened` and `breaker_closed` events.
 - **Tests.** The `alder` timeline from WE-06 to WE-11 as a direct sequence of calls with the stated times and
   states. Boundaries: `open_ms - 1` refused, `open_ms` allowed; an outcome exactly `window_ms` old is dropped;
   3 failures of 3 do not open (`min_calls` 4); 2 failures of 4 open (50%); 1 of 4 does not. Hypothesis state
@@ -201,13 +205,13 @@ rule the module implements. The PRD wins if this plan and the PRD disagree; reco
 
 - **In / out.** `Ledger()` with `reserve(team, request_id, attempt, amount, now, limits) -> ReserveResult`
   (`accepted`, `entry` or `None`, `flags`, balances before), `settle(team, request_id, attempt, actual, now)`,
-  `release(..., memo)`, `adjust(team, period, amount, now, memo)`, `sweep(now, ttl_ms)`,
+  `release(..., memo)`, `adjust(team, amount, now, memo)` (period is the period of `now`), `sweep(now, ttl_ms)`,
   `balance(team, period) -> Balance(spent, held)`, `entries() -> tuple[LedgerEntry, ...]`,
   `to_jsonl()` / `from_jsonl()` (PRD 6.1, 6.2).
 - **Invariants.** SW-02, SW-03, AC-C4 to AC-C6. The check and the append in `reserve` are one critical section.
 - **Tests.** WE-14 to WE-17, WE-22, WE-23 at ledger level. Every `LedgerError` path appends nothing. Hypothesis:
-  random interleavings of reserve and settle from up to 20 requests under each overage setting keep
-  `spent + held <= ceiling` at every prefix, and balances recomputed from `entries()` equal `balance()`.
+  random interleavings of reserve, settle and adjustment from up to 20 requests under each overage setting keep
+  AC-C1 and AC-C2 as worded in the PRD, and balances recomputed from `entries()` equal `balance()`.
   Threaded test per AC-C3. JSON Lines round-trip.
 
 ### `budget.py`
@@ -221,12 +225,14 @@ rule the module implements. The PRD wins if this plan and the PRD disagree; reco
 
 ### `providers/base.py`, `providers/fake.py`
 
-- **In / out.** `Provider` protocol: `call(model, request, started_ms, timeout_ms) -> ProviderResult`
-  (`outcome`, `latency_ms`, `input_tokens`, `output_tokens`, `text`). `FakeProvider(provider_id, catalog,
-  script)`: a script is a list of windows `{from_ms, to_ms, outcome, latency_ms?, billed_input_tokens?,
+- **In / out.** `Provider` protocol: `call(model, request, started_ms, timeout_ms, fake_output_tokens, tag) ->
+  ProviderResult` (`outcome`, `latency_ms`, `input_tokens`, `output_tokens`, `text`). `tag` is the first 12 hex
+  characters of the cache key, used only in the fake text. `FakeProvider(provider_id, catalog, script,
+  case_start_ms)`: a script is a list of windows `{from_ms, to_ms, outcome, latency_ms?, billed_input_tokens?,
   billed_output_tokens?}` relative to the case start; a call that starts in `[from_ms, to_ms)` follows the first
   matching window. Otherwise the result is `ok` after the model's declared latency, with
-  `output_tokens = min(max_output_tokens, fake_output_tokens)`. The fake does not move the clock; the engine
+  `output_tokens = min(max_output_tokens, fake_output_tokens)`; `fake_output_tokens=None` means
+  `max_output_tokens`. A window with no `latency_ms` uses the model's declared latency. The fake does not move the clock; the engine
   advances it by `latency_ms`. Response text is `"[fake <model>] <first 12 hex of the cache key>"`.
 - **Invariants.** A latency above `timeout_ms` returns `timeout` with `latency_ms == timeout_ms`. Billed tokens
   never exceed the request's `input_tokens` and `max_output_tokens` (script validation). A successful call bills
@@ -253,14 +259,17 @@ rule the module implements. The PRD wins if this plan and the PRD disagree; reco
   `handle` returns. A probe permit is always returned or resolved.
 - **Tests.** Unit tests for each status. `failed_exhausted` when every breaker is open (no attempts, no ledger
   entries) and when `max_attempts` is reached. `deny` on a fallback attempt leaves earlier charges standing.
-  Budget refusal during a half-open probe gives the permit back. Hypothesis: random request streams and outage
+  Budget refusal during a half-open probe gives the permit back. A duplicate `request_id` and an unknown
+  tag give `bad_request` with no attempts. A team with no config gives `unknown_team`. A `rate_limited` outcome
+  behaves like the other failures. A downgrade chain never repeats a model already attempted. Hypothesis: random request streams and outage
   scripts keep SW-02, SW-04, SW-05 and SW-06 and reconcile clean.
 
 ### `trace.py`
 
 - **In / out.** `to_jsonl(traces)`, `from_jsonl(text)`, `reconcile(traces, ledger_entries) -> list[Difference]`
   (PRD 8.2).
-- **Tests.** AC-E2, AC-E3 (mutation tests: change one cost, drop one ledger line, swap two `settle_seq` values).
+- **Tests.** AC-E2, AC-E3 (mutation tests: change one cost, drop one reserve or settle line, swap two
+  `settle_seq` values, including two zero-cost settles). The ledger integrity checks in PRD 8.2.
   AC-E5: no message content appears in the JSON Lines of any golden case.
 
 ### `report.py`
@@ -295,7 +304,7 @@ rule the module implements. The PRD wins if this plan and the PRD disagree; reco
 | `test_sw04_reconciliation.py` | `reconcile` is empty for golden and generated runs, and non-empty after any single mutation |
 | `test_sw05_sensitive.py` | Tagged requests never reach an uncleared model or the cache |
 | `test_sw06_no_retry_storm.py` | Breaker and retry-budget bounds under generated outage scripts |
-| `test_sw07_integer_money.py` | Money fields reject floats; an AST scan of `src/switchyard` finds no `float(` call, float literal or `/` true division in `money.py`, `ledger.py`, `budget.py`, `report.py` |
+| `test_sw07_integer_money.py` | Money fields reject floats; an AST scan of every module in `src/switchyard` finds no `float(` call, float literal or `/` true division |
 | `test_sw08_explainable.py` | Reasons are complete and rebuild the chain |
 | `test_sw09_fakes_only.py` | An AST scan of `src/switchyard` finds no import of a network or provider module and no environment read |
 
@@ -303,7 +312,8 @@ rule the module implements. The PRD wins if this plan and the PRD disagree; reco
 
 `tests/golden/test_worked_examples.py` is parametrized over `fixtures/cases/*.yaml`. For each request or step it
 compares the result with the `expect` block, and for each case the `expect_end` block. A second test checks that
-every ID from WE-01 to WE-30 appears in exactly one case, so no worked example can be dropped quietly.
+every ID from WE-01 to WE-30 appears in the `covers` list of exactly one case, so no worked example can be
+dropped quietly.
 
 ## 7. Risks and how to handle them
 

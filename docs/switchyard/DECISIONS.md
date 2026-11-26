@@ -31,3 +31,21 @@ reversed decision gets a new row that names the one it replaces.
 | D-022 | Build-log number and license | | Neither was given. No number is stated. No `LICENSE` file is added and `pyproject.toml` has no license field | **Shane to decide** (Yardstick is MIT, copyright Lab Intelligence, LLC) |
 | D-023 | Which branch Phase 1 starts from | (a) `main`, (b) `prd` while the kit pull request is unmerged | **(b)**: branch `phase-1` from `prd`, draft pull request against `prd`, so it never touches `main`. If the kit is merged first, branch from `main` | `NEXT.md`. The Phase 1 run's own prompt wins where it differs |
 | D-024 | How the worked-example numbers were checked | | A throwaway script in the run's sandbox computed all 30. It is not committed, because `prd` is docs only. Phase 1's golden tests are the real check | see "Not verified" in the pull request |
+
+## 2026-11-26: after the independent review (same run)
+
+A fresh agent that saw only the PRD, the two plans and the fixtures README reviewed them as a platform engineer
+and as a finance reviewer, and recomputed every worked example. It confirmed all the arithmetic and found 22
+issues, none a blocker. These rows record the judgment calls made in fixing them.
+
+| ID | Problem | Options | Decision | Change it |
+|---|---|---|---|---|
+| D-025 | `fallback_used` was not defined for a downgraded request, and some rows left flags out | | Each worked-example row now lists the complete flag set. `fallback_used` needs an earlier, different model that was attempted or breaker-skipped. A downgrade alone sets only `downgraded` | PRD 5.3 |
+| D-026 | The no-overspend invariants ignored adjustments, which do count toward `committed` | (a) forbid adjustments after the first reserve, (b) restate the invariant | **(b)**: every accepted reserve leaves `committed <= ceiling` with adjustments included; only an adjustment can push past it | PRD AC-C1, AC-C2, SW-02 |
+| D-027 | `reconcile` cannot see a removed trailing adjustment | (a) add a hash chain or control total, (b) narrow the claim | **(b)** for now, plus ledger integrity checks inside `reconcile`. A hash chain is a fair later addition | PRD 8.2, AC-E3 |
+| D-028 | Which day each report column belongs to | | Request-level columns by arrival day, attempt-level columns by reserve day, adjustments by their own day, and an adjustment's period is the period of its timestamp | PRD 8.3 |
+| D-029 | A cache hit could return an answer made under a different rule or limits | (a) check the entry's model against the current chain, (b) put rule id, effective limits and `input_tokens` in the key | **(b)**. Simpler to explain: same key, same route | PRD 7.1 |
+| D-030 | Retry-budget "first attempt" counted every non-retry attempt on a provider | | Only a request's first attempt on the provider counts | PRD 5.3 |
+| D-031 | No status for an invalid request or a repeated `request_id` | (a) a new status, (b) reuse `bad_request` | **(b)**, with no attempts and `cache: not_checked` | PRD 3.7 |
+| D-032 | Breaker state changes were not recorded anywhere | | Trace events `probe`, `breaker_opened`, `breaker_closed`; optional `breakers_after` and `balance_after` in fixtures | PRD 5.2, 8.1 |
+| D-033 | Review items not acted on | | No new worked examples were added for `failed_exhausted`, `unknown_team`, `rate_limited`, the `max_attempts` stop, probe give-back or `sweep`; they are unit tests in `PHASE-1-PLAN.md`. The flag name `soft_limit_crossed` was kept and defined as hold-based instead of renamed | add rows to PRD section 11 and a case file |

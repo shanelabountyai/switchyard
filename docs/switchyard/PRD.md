@@ -55,7 +55,8 @@ Yardstick can. Section 9 describes how a route change could be gated by a Yardst
   the ledger never records less than the exact cost. The rounding error is under 1 µUSD per attempt.
 - **Worst-case cost** of a request on a model is the same formula with `output_tokens = max_output_tokens`.
 - Display: `cost_usd` is the string `micro // 1_000_000`, a dot, then `micro % 1_000_000` zero-padded to six
-  digits. Example: 13200 µUSD prints as `0.013200`. Negative adjustments print with a leading minus sign.
+  digits. Example: 13200 µUSD prints as `0.013200`. A negative amount is formatted from its absolute value with a
+  leading minus sign (`-0.013200`). `parse_usd` is the exact inverse.
 
 ### 3.2 Time
 
@@ -107,6 +108,8 @@ A fake provider's successful response takes exactly the model's declared latency
 | `retry_budget.window_ms` | 10,000 | How far back the retry budget looks |
 | `retry_budget.ratio_pct` | 20 | Retries allowed as a share of first attempts in the window |
 | `retry_budget.min_retries` | 1 | Retries always allowed per window, however few first attempts |
+| `reservation_ttl_ms` | 600,000 | Age at which `sweep` releases an unsettled hold (section 6.1) |
+| `cache_max_entries` | 10,000 | Most cache entries per team (section 7.1) |
 
 These live in the policy file's `engine` block. They are defaults for the examples, not recommendations.
 
@@ -125,7 +128,10 @@ These live in the policy file's `engine` block. They are defaults for the exampl
 
 ### 3.7 Order of work for one request
 
-1. **Team lookup.** A team with no config ends the request with status `unknown_team`.
+0. **Validation.** A request with an unknown data tag, a missing or malformed field, or a `request_id` the
+   engine has already seen ends with status `bad_request`, no attempts and `cache: not_checked`.
+1. **Team lookup.** A team with no config ends the request with status `unknown_team`. There is no default team
+   config.
 2. **Route** (pure function, section 4). An empty chain ends the request with status `no_route`.
 3. **Cache** (section 7). A bypass is recorded. A hit ends the request with status `ok` and no attempts.
 4. **Attempt loop** (sections 5 and 6): breaker check, budget reserve, provider call, settle, then retry, fall
@@ -158,8 +164,10 @@ Statuses: `ok`, `no_route`, `denied_budget`, `failed_exhausted`, `bad_request`, 
 - Latency filtering uses the catalog's declared latency, not measured latency. The effective `max_latency_ms` is
   also the timeout for each attempt.
 - The decision is **explainable**: it carries an ordered list of reasons, each `{code, subject, detail}`:
-  `rule_matched`, `limits_applied`, then one `candidate` or `excluded_*` per model considered (tier order, then
-  model id), then `chosen` or `no_eligible_model`.
+  `rule_matched` (subject: rule id), `limits_applied` (subject: rule id; detail: effective `max_latency_ms` and
+  `max_cost_micro`), then one `candidate` or `excluded_*` per model considered (rule tier order, then model id;
+  subject: model id; detail: `tier`, `worst_case_micro`, `declared_latency_ms`), then `chosen` (subject: the
+  planned model) or `no_eligible_model` (subject: rule id).
 - Routing is a pure function of `(request, policy, catalog)`. It reads no clock, health or budget state.
 
 ### 4.2 Acceptance criteria
@@ -219,11 +227,16 @@ States: `closed`, `open`, `half_open`. Two operations, both taking the current t
     becomes `open` with `opened_at = now`.
   - `half_open`: the probe is over. `ok` closes the breaker and clears its outcomes. A failure reopens it with
     `opened_at = now`.
+  - `open`: can only happen when two calls were allowed at once and the first one opened the breaker (Phase 2).
+    The outcome is added to the window and nothing else changes.
+  - A failed probe is not added to the outcome window. The window is cleared only when the breaker closes.
 - A probe that ends in `bad_request`, or whose budget reserve is refused before the call, gives the permit back
   without changing state.
+- Every state change is a trace event on the request that caused it: `probe` (open to half-open, permit
+  granted), `breaker_opened`, `breaker_closed`, each with the provider and the time.
 
 A provider whose breaker says no is **skipped**: no attempt, no reserve, no charge. The skip is a trace event
-(`breaker_open_skip`). All models of a skipped provider are skipped.
+(`breaker_open_skip`, one event per skipped model). All models of a skipped provider are skipped.
 
 ### 5.3 Retry, fall back or stop
 
@@ -240,8 +253,9 @@ whose provider's breaker allows a call. If the chain is used up or `max_attempts
 with status `failed_exhausted`.
 
 **Retry budget (one per provider).** A **retry** is an attempt on the same model straight after a failed attempt
-on it by the same request. Every other attempt on P is a **first attempt**. The budget keeps the start times of
-both. After a failure at time `now`, a retry is allowed when
+on it by the same request. A **first attempt** is a request's first attempt on P (probes included). Any other
+attempt on P counts as neither. The budget keeps the start times of both. After a failure at time `now`, a retry
+is allowed when
 
 ```text
 retries_in_window < max(min_retries, floor(first_attempts_in_window * ratio_pct / 100))
@@ -251,7 +265,9 @@ where "in window" means `ts > now - window_ms`. Falling back to another provider
 draw on the budget. This is what stops a retry storm: once a provider is failing, almost every request makes one
 attempt on it and moves on, and once its breaker opens, none do.
 
-`fallback_used` is set on a trace when the request was served by a model other than the first in its chain.
+`fallback_used` is set on a trace when the request was served and, earlier in the same request, a **different**
+model was attempted or was skipped because of its breaker. A retry on the same model does not set it. A budget
+downgrade on its own sets `downgraded`, not `fallback_used`.
 
 ### 5.4 Acceptance criteria
 
@@ -261,8 +277,8 @@ attempt on it and moves on, and once its breaker opens, none do.
 - **AC-B3** In `half_open`, at most one probe is in flight (property test over random allow/record sequences).
 - **AC-B4** No request makes more than `max_attempts` attempts or more than `max_retries_per_provider` retries
   on one provider.
-- **AC-B5** For every provider and every instant, retries in the window never exceed
-  `max(min_retries, floor(first_attempts_in_window * ratio_pct / 100))` as evaluated when each retry was allowed.
+- **AC-B5** At the moment each retry is allowed (the failure time), the retries already in the window are fewer
+  than `max(min_retries, floor(first_attempts_in_window * ratio_pct / 100))`.
 - **AC-B6** `bad_request` is never retried, never falls back and never changes breaker state.
 - **AC-B7** A skipped provider produces no ledger entry.
 - **AC-B8** Worked examples WE-06 to WE-13 reproduce exactly, including every timestamp.
@@ -301,7 +317,7 @@ An append-only list of entries. Nothing is edited or deleted. A correction is a 
 | `request_id`, `attempt` | Which attempt (1-based). Empty for an adjustment |
 | `amount_micro` | `reserve`: amount held. `settle`: actual cost. `release`: 0. `adjustment`: signed amount |
 | `ref_seq` | `settle` and `release`: the `seq` of the reserve they close |
-| `flags` | `soft_limit_crossed`, `over_hard_limit` (on a reserve) |
+| `flags` | `soft_limit_crossed`, `over_hard_limit` (on a reserve); `unsettled` (on a release made by `sweep`) |
 | `memo` | Required for `adjustment` and `release` |
 
 For one team and period:
@@ -313,12 +329,15 @@ committed = spent + held
 ```
 
 - A `settle` or `release` is posted to the **period of the reserve it closes**, whatever the clock says when it
-  settles. The **accounting time** of an attempt is its reserve time. Daily reports use the same rule.
+  settles. The **accounting time** of an attempt is its reserve time. Daily reports use the same rule: a settle
+  is counted on the UTC day of the reserve its `ref_seq` points at, never on the day of its own `ts_ms`.
 - `settle.amount` may not exceed the reserve it closes. Every reserve is closed exactly once.
 - `release` closes a reserve with no spend. Phase 1 uses it only in `sweep(now)`, which releases reserves older
-  than `reservation_ttl_ms` (default 600,000) and marks them `unsettled` for a person to look at.
-- `adjustment` is a manual correction or an opening balance. It is not checked against limits. It counts toward
-  `spent`. It may not take `spent` below 0. Fixtures use it to seed "already spent this period".
+  than `reservation_ttl_ms` and writes each release with the flag `unsettled` for a person to look at. If the
+  provider did bill, the fix is a manual `adjustment`.
+- `adjustment` is a manual correction or an opening balance. It is posted to the period of its own `ts_ms`. It is
+  not checked against limits. It counts toward `spent`, and so toward `committed` in every later reserve check.
+  It may not take `spent` below 0. Fixtures use it to seed "already spent this period".
 
 ### 6.2 Reserve, then settle
 
@@ -351,6 +370,11 @@ otherwise append the reserve, with flags:
   over_hard_limit     if committed + amount > hard_limit
 ```
 
+Both flags are about the **hold**: they describe `committed` at reserve time, counting this reserve at its
+worst-case amount. A request can carry `soft_limit_crossed` and finish with `spent` still under the soft limit
+(WE-14), and every reserve above the soft limit carries the flag, not only the first. Reports label the counts
+"reserves above the soft limit".
+
 A reserve that lands exactly on the ceiling is allowed (`<=`). Because the check and the append happen under one
 lock and count `held`, two requests in flight cannot both take the last of a budget.
 
@@ -362,6 +386,13 @@ lock and count `held`, two requests in flight cannot both take the last of a bud
 | `downgrade` | Once per request, the rest of the chain is replaced by the **downgrade chain**: every eligible model (same clearance, latency and cost checks as routing) in tiers strictly below the refused model's tier and not below the rule's `min_tier`, highest tier first, cheapest first within a tier. The engine tries to reserve each in order. A model whose reserve is also refused is skipped (`budget_refused`). If none can be reserved, status `denied_budget`. A served request carries the flag `downgraded` |
 | `allow_with_flag` | The ceiling is `hard_limit + overage_cap`. Reserves above the hard limit carry `over_hard_limit`. A reserve above the ceiling ends the request with `denied_budget` |
 
+Details that apply to every policy:
+
+- A refused reserve and a breaker skip do not use an attempt number and do not count toward `max_attempts`.
+- "Below" always means the global tier order (`economy < standard < premium`), whatever order the rule lists.
+- The downgrade chain leaves out any model this request has already attempted.
+- Inside the downgrade chain the normal breaker, retry and fallback rules apply.
+
 A refused reserve writes no ledger entry. It is a trace event (`budget_refused`, with the amount and the
 balances at that moment). Soft limits never block. They flag.
 
@@ -370,10 +401,12 @@ Limits are read from team config at reserve time.
 
 ### 6.4 Acceptance criteria
 
-- **AC-C1** At every prefix of the ledger, for every team and period, `spent + held <= hard_limit + overage_cap`
-  counting only `reserve`, `settle` and `release` entries (cap is 0 unless `allow_with_flag`). Property test over
-  random interleavings of reserve and settle steps from many requests.
-- **AC-C2** With `deny` or `downgrade`, the sum of settles in a period never exceeds `hard_limit`.
+- **AC-C1** Every accepted reserve leaves `committed <= hard_limit + overage_cap` (cap is 0 unless
+  `allow_with_flag`), with adjustments included in `committed`. A settle or release never raises `committed`. So
+  only an adjustment can take `committed` above the ceiling. Property test over random interleavings of reserve,
+  settle and adjustment steps from many requests.
+- **AC-C2** With `deny` or `downgrade`, in a period where no adjustment is posted after the first reserve,
+  `spent <= hard_limit` at every prefix of the ledger.
 - **AC-C3** A threaded test (32 threads, each reserving against a budget that fits 10) ends with exactly 10
   reserves accepted and no overspend, on every one of 50 runs.
 - **AC-C4** `settle > reserve`, a second settle, a settle with no reserve, and a duplicate
@@ -394,7 +427,7 @@ triage requests A, B and C, each reserving 120 and costing 90. The steps interle
 | 1 | reserve A, 120 | 9,790 | 9,910 ≤ 10,000 | accepted, `soft_limit_crossed` | 9,790 | 120 |
 | 2 | reserve B, 120 | 9,910 | 10,030 > 10,000 | **refused**: B ends `denied_budget` | 9,790 | 120 |
 | 3 | settle A, 90 | | | hold of 120 released, 90 spent | 9,880 | 0 |
-| 4 | reserve C, 120 | 9,880 | 10,000 ≤ 10,000 | accepted (exactly at the limit) | 9,880 | 120 |
+| 4 | reserve C, 120 | 9,880 | 10,000 ≤ 10,000 | accepted (exactly at the limit), `soft_limit_crossed` | 9,880 | 120 |
 | 5 | settle C, 90 | | | | 9,970 | 0 |
 
 Without the hold, A and B would both have seen 9,790 + 120 ≤ 10,000 and both run. Here B is refused while A is
@@ -407,9 +440,12 @@ in flight. B's refusal is conservative: A went on to cost 90, not 120. That is t
 - **Exact match only.** The key is `sha256` of the canonical JSON of:
 
   ```text
-  {v: 1, team, use_case, task_class, messages (normalized), max_output_tokens, temperature, config_version}
+  {v: 1, team, rule_id, use_case, task_class, messages (normalized), input_tokens, max_output_tokens,
+   temperature, max_latency_ms (effective), max_cost_micro (effective), config_version}
   ```
 
+  The lookup happens after routing, so the matched rule id and the effective limits are known. With them in the
+  key, a hit can only return an answer made for a request with the same rule and the same chain.
   `config_version` is the content hash of the routing policy plus the catalog, so any policy or catalog change
   empties the cache in effect. `app`, `request_id` and timestamps are not in the key.
 - **Normalization** of each message: role lower-cased; content converted to Unicode NFC, `\r\n` and `\r` turned
@@ -428,7 +464,7 @@ in flight. B's refusal is conservative: A went on to cost 90, not 120. That is t
 - **Store.** After an `ok` attempt, when the request was not bypassed, was not `downgraded`, and the serving
   model's tier equals the first tier of the rule. This stops a cheaper answer, given under budget or outage
   pressure, from being replayed later as the normal answer.
-- Size: `max_entries` per team (default 10,000). When full, the entry with the oldest `stored_at` is dropped
+- Size: `cache_max_entries` per team (section 3.5). When full, the entry with the oldest `stored_at` is dropped
   (ties by key).
 - **Semantic caching** (matching on meaning rather than exact text) is a later phase. It is not built, and
   nothing in Phases 1 to 4 depends on it.
@@ -437,12 +473,13 @@ in flight. B's refusal is conservative: A went on to cost 90, not 120. That is t
 
 - **AC-D1** A request with any data tag never reads or writes the cache (property test: after any sequence of
   requests, no stored entry came from a tagged request, and no tagged request has `cache: hit`).
-- **AC-D2** Two requests that differ only in `request_id`, `app`, line endings, Unicode composition, or leading
-  and trailing whitespace of a message have the same key. Two that differ in any other key field do not.
+- **AC-D2** Two requests that differ only in `request_id`, `app` (when the same rule still matches), line
+  endings, Unicode composition, or leading and trailing whitespace of a message have the same key. Two that differ in any other key field do not.
 - **AC-D3** A hit appends nothing to the ledger and has `cost_micro` 0.
 - **AC-D4** An entry is a hit at `ttl_ms - 1` and a miss at `ttl_ms`.
 - **AC-D5** A team with `cache.enabled: false` never reads or writes.
-- **AC-D6** A `downgraded` response, or one served below the rule's first tier, is never stored.
+- **AC-D6** A `downgraded` response, or one served from any tier other than the rule's first tier, is never
+  stored.
 - **AC-D7** Worked examples WE-24 to WE-29 reproduce exactly.
 
 ### 7.3 Worked example (WE-24 to WE-27)
@@ -468,8 +505,9 @@ Team `research` (cache on, TTL 60,000 ms) sends the same request under the `defa
 | `arrived_ms`, `finished_ms` | From the injected clock |
 | `config_version` | Hash of policy plus catalog |
 | `route` | Rule id, chain, ordered reasons (section 4) |
+| `cache_key` | The key hash, or empty when the cache was not checked or was bypassed |
 | `cache` | `hit`, `miss`, one of the three bypass codes, or `not_checked` when the request ended before the cache step. `avoided_micro` on a hit |
-| `events` | Ordered runtime events: `breaker_open_skip`, `retry`, `no_retry` (with reason), `budget_refused`, `downgrade_chain`, `probe` |
+| `events` | Ordered runtime events, each `{code, at_ms, subject, detail}`: `breaker_open_skip`, `probe`, `breaker_opened`, `breaker_closed`, `retry`, `no_retry` (detail: reason), `budget_refused` (detail: amount, `spent`, `held`, ceiling), `downgrade_chain` (detail: the models) |
 | `attempts` | Ordered. Each: `attempt`, `provider`, `model`, `started_ms`, `finished_ms`, `outcome`, `input_tokens`, `output_tokens` (billed), `reserved_micro`, `cost_micro`, `period`, `reserve_seq`, `settle_seq` |
 | `status` | One of the six statuses |
 | `flags` | `soft_limit_crossed`, `over_hard_limit`, `downgraded`, `fallback_used` |
@@ -488,6 +526,10 @@ The trace adds up exactly to the ledger:
   settles. `spent` equals that sum plus adjustments.
 - After a run with nothing in flight, `held` is 0 for every team and period.
 
+`reconcile` also checks the ledger itself: `seq` runs 1 to n with no gap, every reserve is closed exactly once,
+every `ref_seq` points at a reserve with the same `(request_id, attempt)`, and each attempt's settle has
+`ref_seq == reserve_seq`.
+
 `reconcile(traces, ledger)` returns a list of differences. An empty list is the only passing result.
 
 ### 8.3 Daily per-team cost report
@@ -499,9 +541,20 @@ Markdown and JSON, one row per team and UTC day:
 the ledger"), `adjustments_micro`, flag counts, then period-to-date `spent`, `soft_limit`, `hard_limit` and
 `remaining` (`hard_limit - spent`, which may be negative under `allow_with_flag`).
 
-Costs are counted on the UTC day of each attempt's reserve. A request that arrives before midnight and makes an
-attempt after it is counted as a request on the first day and as cost on the day of each attempt. The report
-says so in a footnote.
+Which day each column belongs to:
+
+- **By arrival day of the request:** `requests`, the status counts, `cache_hits`, the flag counts and
+  `avoided_micro`.
+- **By reserve day of the attempt:** `attempts`, `failed_attempts`, `input_tokens`, `output_tokens` and the cost
+  columns.
+- **By the day of its own `ts_ms`:** `adjustments_micro`.
+- **Period-to-date** columns are for the period containing the row's day, as of the end of that day by
+  accounting time (settles by reserve day, adjustments by their own day).
+- A row exists for every team and day with at least one arrival, one reserve or one adjustment.
+- Limits come from team config. A team with no config (`unknown_team` requests) shows blank limits.
+
+So a request that arrives before midnight and makes an attempt after it is counted as a request on the first
+day and as cost on the day of each attempt. The report says so in a footnote.
 
 The report runs `reconcile` first. If there is any difference it prints the differences and exits 1 instead of
 printing totals.
@@ -510,8 +563,9 @@ printing totals.
 
 - **AC-E1** Every request produces exactly one trace record, whatever its status.
 - **AC-E2** `reconcile` returns no differences for every golden case and for hypothesis-generated runs.
-- **AC-E3** Changing any one `cost_micro` in a trace, or removing any one ledger line, makes `reconcile` report
-  a difference.
+- **AC-E3** Changing any one `cost_micro` in a trace, or removing any one `reserve` or `settle` line from the
+  ledger, makes `reconcile` report a difference. (A removed trailing adjustment cannot be detected from traces.
+  That would need a control total or hash chain, which is not in scope.)
 - **AC-E4** The sum of a team's daily `cost_micro` over a period plus its adjustments equals the ledger's `spent`
   for that period.
 - **AC-E5** No trace contains message text.
@@ -560,19 +614,19 @@ which this project does not call.
 | ID | Invariant |
 |---|---|
 | SW-01 | **Deterministic.** Same catalog, policy, team config, scripts, requests and fake clock give byte-identical traces, ledger and report |
-| SW-02 | **No overspend.** `spent + held <= hard_limit + overage_cap` at every ledger prefix (AC-C1) |
+| SW-02 | **No overspend.** Every accepted reserve leaves `spent + held <= hard_limit + overage_cap`, and nothing but an adjustment can raise `spent + held` past it (AC-C1, AC-C2) |
 | SW-03 | **Ledger integrity.** Append-only, gapless `seq`, every reserve closed exactly once, `settle <= reserve` |
 | SW-04 | **Reconciliation.** Traces add up exactly to the ledger, and the report to both (section 8.2) |
 | SW-05 | **Sensitive data.** A tagged request never reaches a model not cleared for its tags and never touches the cache |
 | SW-06 | **No retry storm.** Breaker and retry-budget bounds hold (AC-B2 to AC-B5) |
 | SW-07 | **Integer money.** No float in any money path |
 | SW-08 | **Explainable.** Every decision's reasons are complete and sufficient to rebuild its chain (AC-A2, AC-A3) |
-| SW-09 | **Fakes only.** The package imports no network client and reads no environment variable. A test scans `src/` for `os.environ`, `getenv`, `socket`, `http`, `urllib`, `requests`, `httpx` and known provider SDK names |
+| SW-09 | **Fakes only.** The package imports no network client and reads no environment variable. A test scans `src/` for `os.environ`, `getenv`, `socket`, `http`, `urllib`, `requests`, `httpx` and known provider SDK names. From Phase 2 the one `server` package is exempt for its local HTTP framework only |
 
 ## 11. Worked examples that Phase 1 tests must reproduce
 
 All numbers are illustrative. Money is µUSD. Each row is asserted by a golden test (`fixtures/README.md` gives
-the case files). Unless a row says otherwise: budgets are far from their limits, and the serving model's success
+the case files). Each row gives the request's **complete** set of flags: a row that names none has none. Unless a row says otherwise: budgets are far from their limits, and the serving model's success
 takes its declared latency. The team's cache is **off** in every case except `c08`, `c13` and `c14`, so repeated
 requests in the other cases are never served from cache. "res" is the amount reserved and "cost" the amount settled.
 
@@ -583,24 +637,24 @@ requests in the other cases are never served from cache. "res" is the amount res
 | WE-03 | `c01-routing-basics` | support / helpdesk / reply-draft / draft, 3,000 in, max out 1,500, fake out 900 | rule `support-reply`; `birch-medium` (22,500), `alder-large` (108,000), `cedar-large` (90,000) `excluded_cost`; chain `[alder-medium]` | 1: `alder-medium` ok | res 18,000, cost 13,200 |
 | WE-04 | `c01-routing-basics` | legal / clm / contract-review / reason, tag `restricted`, request `max_latency_ms` 2,000, 20,000 in, max out 2,000 | rule `legal-review`; `alder-large` `excluded_not_cleared`; `cedar-large` `excluded_latency` (2,500 > 2,000); chain `[]` | none | status `no_route`; no ledger entry; cost 0 |
 | WE-05 | `c01-routing-basics` | marketing / site / blurb / summarize, 1,234 in, max out 100, fake out 57 | rule `default`; chain `[alder-small, birch-small, alder-medium, birch-medium]` | 1: `alder-small` ok | res 327 (exact 326.8), cost 293 (exact 292.4): the ceiling rule |
-| WE-06 | `c02-provider-outage` | triage request as WE-01, t=0; `alder` fails `[0, 20000)` | chain `[alder-small, birch-small]` | 3: `alder-small` server_error 0–50; retry 250–300 server_error; `birch-small` 300–600 ok | res 120, 120, 150; cost 0, 0, 112; `fallback_used` |
-| WE-07 | `c02-provider-outage` | same, t=1000 | same | 2: `alder-small` server_error 1000–1050; no retry (`retry_budget_exhausted`); `birch-small` 1050–1350 ok | cost 0, 112; `fallback_used` |
-| WE-08 | `c02-provider-outage` | same, t=2000 | same | 2: `alder-small` server_error 2000–2050, breaker opens; `birch-small` 2050–2350 ok | cost 0, 112; `alder` breaker `open` at 2050 |
-| WE-09 | `c02-provider-outage` | same, t=3000 | same | 1: `alder-small` skipped (`breaker_open_skip`); `birch-small` 3000–3300 ok | res 150, cost 112; no ledger entry for `alder` |
-| WE-10 | `c02-provider-outage` | same, t=13000 | same | 2: probe `alder-small` server_error 13000–13050, breaker reopens; `birch-small` 13050–13350 ok | cost 0, 112 |
+| WE-06 | `c02-provider-outage` | triage request as WE-01, t=0; `alder` fails `[0, 20000)` | chain `[alder-small, birch-small]` | 3: `alder-small` server_error 0–50; retry 250–300 server_error; `birch-small` 300–600 ok | res 120, 120, 150; cost 0, 0, 112; flags `fallback_used` |
+| WE-07 | `c02-provider-outage` | same, t=1000 | same | 2: `alder-small` server_error 1000–1050; no retry (`retry_budget_exhausted`); `birch-small` 1050–1350 ok | cost 0, 112; flags `fallback_used` |
+| WE-08 | `c02-provider-outage` | same, t=2000 | same | 2: `alder-small` server_error 2000–2050, breaker opens; `birch-small` 2050–2350 ok | cost 0, 112; flags `fallback_used`; `alder` breaker `open` at 2050 |
+| WE-09 | `c02-provider-outage` | same, t=3000 | same | 1: `alder-small` skipped (`breaker_open_skip`); `birch-small` 3000–3300 ok | res 150, cost 112; flags `fallback_used`; no ledger entry for `alder` |
+| WE-10 | `c02-provider-outage` | same, t=13000 | same | 2: probe `alder-small` server_error 13000–13050, breaker reopens; no retry (`breaker_open`); `birch-small` 13050–13350 ok | cost 0, 112; flags `fallback_used` |
 | WE-11 | `c02-provider-outage` | same, t=24000 (outage over) | same | 1: probe `alder-small` ok 24000–24400, breaker closes | res 120, cost 90; case total 650 |
 | WE-12 | `c03-attempt-errors` | marketing / site / blurb / summarize, 1,000 in, max out 200, fake out 150, t=0; `alder` scripted latency 9,999 ms for calls starting in `[0, 2100)`, billing 1,000 in and 80 out | rule `default`; chain `[alder-small, birch-small, alder-medium, birch-medium]` | 2: `alder-small` timeout 0–2000 (timeout = 2,000); backoff; `alder-small` 2200–2600 ok | res 360, 360; cost 264, 320; request total 584 |
 | WE-13 | `c03-attempt-errors` | same request, t=10000; `alder` returns `bad_request` after 30 ms for calls starting in `[10000, 10100)` | same chain | 1: `alder-small` bad_request 10000–10030; no retry, no fallback | res 360, cost 0; status `bad_request`; breaker unchanged |
 | WE-14 | `c04-budget-soft-limit` | triage request; support soft 8,000, hard 10,000, `deny`, opening 7,900 | chain `[alder-small, birch-small]` | 1: `alder-small` ok | 7,900 + 120 = 8,020 > 8,000: `soft_limit_crossed`; cost 90; spent 7,990 |
 | WE-15 | `c05-budget-hard-deny` | triage request; same limits, opening 9,950 | same | none | 9,950 + 120 = 10,070 > 10,000: refused; status `denied_budget`; spent 9,950; no new ledger entry |
-| WE-16 | `c06-budget-boundary` | triage request; same limits, opening 9,880 | same | 1: `alder-small` ok | 9,880 + 120 = 10,000 ≤ 10,000: accepted; cost 90; spent 9,970 |
-| WE-17 | `c07-concurrent-overspend` | three triage requests A, B, C interleaved; same limits, opening 9,790 | same | A ok; B none; C ok | A reserved (9,910); B refused (10,030); A settles 90 (spent 9,880); C reserved (10,000); C settles 90; spent 9,970, held 0 |
+| WE-16 | `c06-budget-boundary` | triage request; same limits, opening 9,880 | same | 1: `alder-small` ok | 9,880 + 120 = 10,000 ≤ 10,000: accepted; flags `soft_limit_crossed`; cost 90; spent 9,970 |
+| WE-17 | `c07-concurrent-overspend` | three triage requests A, B, C interleaved; same limits, opening 9,790 | same | A ok; B none; C ok | A reserved (9,910, `soft_limit_crossed`); B refused (10,030); A settles 90 (spent 9,880); C reserved (10,000, `soft_limit_crossed`); C settles 90; spent 9,970, held 0 |
 | WE-18 | `c08-budget-downgrade` | support / helpdesk / reply-draft / draft, 800 in, max out 400, fake out 350; soft 8,000, hard 10,000, `downgrade`, opening 9,000 | rule `support-reply`; chain `[alder-medium, birch-medium]` (4,800, 6,000); premium `excluded_cost` (28,800, 24,000) | 1: `alder-medium` reserve 4,800 refused (13,800 > 10,000); downgrade chain `[alder-small, birch-small]` (480, 600); `alder-small` ok | res 480, cost 440; `downgraded`, `soft_limit_crossed`; spent 9,440; cache `miss` and nothing stored (0 entries) |
 | WE-19 | `c09-budget-downgrade-denied` | as WE-18, opening 9,700 | same | none | 4,800 refused; 480 refused (10,180); 600 refused (10,300); status `denied_budget`; spent 9,700 |
 | WE-20 | `c10-budget-allow-flag` | research / nb / notes / summarize, 1,000 in, max out 200, fake out 150, t=0; soft 8,000, hard 10,000, `allow_with_flag`, cap 2,000, opening 9,950 | rule `default`; chain `[alder-small, birch-small, alder-medium, birch-medium]` | 1: `alder-small` ok | 9,950 + 360 = 10,310: over hard, under ceiling 12,000; `over_hard_limit`, `soft_limit_crossed`; cost 320; spent 10,270 |
 | WE-21 | `c10-budget-allow-flag` | same team, t=1000, 4,000 in, max out 1,200 | rule `default`; `alder-medium` (17,600) and `birch-medium` (22,000) `excluded_cost`; chain `[alder-small, birch-small]` (1,760, 2,200) | none | 10,270 + 1,760 = 12,030 > 12,000: refused; status `denied_budget`; spent 10,270 |
-| WE-22 | `c11-period-rollover` | triage request twice; support hard 10,000, `deny`; 2026-11 opening 9,950; first at 2026-11-30T23:59:59.000Z, second at 2026-12-01T00:00:00.000Z | chain `[alder-small, birch-small]` | first: none; second: 1 `alder-small` ok | first refused (period 2026-11); second res 120, cost 90 in period 2026-12; 2026-11 spent 9,950; 2026-12 spent 90 |
-| WE-23 | `c12-period-straddle` | triage request at 2026-11-30T23:59:59.900Z; 2026-11 opening 9,000 | same | 1: `alder-small` ok, finishes 2026-12-01T00:00:00.300Z | reserve and settle both post to 2026-11; 2026-11 spent 9,090; 2026-12 has no entries; daily report counts the 90 on 2026-11-30 |
+| WE-22 | `c11-period-rollover` | triage request twice; support soft 8,000, hard 10,000, `deny`; 2026-11 opening 9,950; first at 2026-11-30T23:59:59.000Z, second at 2026-12-01T00:00:00.000Z | chain `[alder-small, birch-small]` | first: none; second: 1 `alder-small` ok | first refused (period 2026-11); second res 120, cost 90 in period 2026-12, no flags; 2026-11 spent 9,950; 2026-12 spent 90 |
+| WE-23 | `c12-period-straddle` | triage request at 2026-11-30T23:59:59.900Z; support soft 8,000, hard 10,000, `deny`; 2026-11 opening 9,000 | same | 1: `alder-small` ok, finishes 2026-12-01T00:00:00.300Z | reserve and settle both post to 2026-11; flags `soft_limit_crossed` (9,120 > 8,000); 2026-11 spent 9,090; 2026-12 has no entries; daily report counts the 90 on 2026-11-30 |
 | WE-24 | `c13-cache-exact` | research / nb / notes / summarize, 1,000 in, max out 200, fake out 150, temp `"0"`, TTL 60,000, t=0 | rule `default`; chain as WE-20 | 1: `alder-small` ok 0–400 | cache `miss`; cost 320; stored at t=400 |
 | WE-25 | `c13-cache-exact` | same, two trailing spaces in content, new `request_id`, t=5000 | same | none | cache `hit`; cost 0; `avoided_micro` 320; no ledger entry |
 | WE-26 | `c13-cache-exact` | same as WE-24, t=60399 | same | none | cache `hit` (age 59,999) |
