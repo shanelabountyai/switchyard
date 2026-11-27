@@ -1,0 +1,17 @@
+# ILLUSTRATIVE. Fictional providers and made-up prices.
+# alder, birch and cedar are not real vendors. Prices are integer µUSD per 1,000,000 tokens (PRD 3.3).
+illustrative: true
+known_tags: [pii, restricted]
+models:
+  - {id: alder-small, provider: alder, tier: economy, input_price_micro_per_1m: 200000,
+     output_price_micro_per_1m: 800000, declared_latency_ms: 400, cleared_tags: [pii]}
+  - {id: birch-small, provider: birch, tier: economy, input_price_micro_per_1m: 250000,
+     output_price_micro_per_1m: 1000000, declared_latency_ms: 300, cleared_tags: []}
+  - {id: alder-medium, provider: alder, tier: standard, input_price_micro_per_1m: 2000000,
+     output_price_micro_per_1m: 8000000, declared_latency_ms: 900, cleared_tags: [pii]}
+  - {id: birch-medium, provider: birch, tier: standard, input_price_micro_per_1m: 2500000,
+     output_price_micro_per_1m: 10000000, declared_latency_ms: 700, cleared_tags: []}
+  - {id: cedar-large, provider: cedar, tier: premium, input_price_micro_per_1m: 10000000,
+     output_price_micro_per_1m: 40000000, declared_latency_ms: 2500, cleared_tags: [pii, restricted]}
+  - {id: alder-large, provider: alder, tier: premium, input_price_micro_per_1m: 12000000,
+     output_price_micro_per_1m: 48000000, declared_latency_ms: 2000, cleared_tags: [pii]}

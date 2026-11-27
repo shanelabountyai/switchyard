@@ -1,0 +1,125 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c13-cache-exact
+kind: sequential
+illustrative: true
+description: Miss, hit after normalization, hit one millisecond before the TTL, miss at the TTL.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  research:
+    budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000, overage: deny,
+      overage_cap_micro: 0}
+    cache: {enabled: true, ttl_ms: 60000}
+covers: [WE-24, WE-25, WE-26, WE-27]
+opening: []
+scripts: {}
+requests:
+- we: WE-24
+  at_ms: 0
+  fake_output_tokens: 150
+  request:
+    request_id: r1
+    team: research
+    app: nb
+    use_case: notes
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative note text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: miss
+    attempts:
+    - {model: alder-small, started_ms: 0, finished_ms: 400, outcome: ok, reserved_micro: 360, cost_micro: 320}
+    events: []
+    flags: []
+    cost_micro: 320
+- we: WE-25
+  at_ms: 5000
+  fake_output_tokens: 150
+  request:
+    request_id: r2
+    team: research
+    app: nb
+    use_case: notes
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: 'Illustrative note text  '}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: hit
+    attempts: []
+    events: []
+    flags: []
+    cost_micro: 0
+    avoided_micro: 320
+- we: WE-26
+  at_ms: 60399
+  fake_output_tokens: 150
+  request:
+    request_id: r3
+    team: research
+    app: nb
+    use_case: notes
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative note text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: hit
+    attempts: []
+    events: []
+    flags: []
+    cost_micro: 0
+    avoided_micro: 320
+- we: WE-27
+  at_ms: 60400
+  fake_output_tokens: 150
+  request:
+    request_id: r4
+    team: research
+    app: nb
+    use_case: notes
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative note text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: miss
+    attempts:
+    - {model: alder-small, started_ms: 60400, finished_ms: 60800, outcome: ok, reserved_micro: 360, cost_micro: 320}
+    events: []
+    flags: []
+    cost_micro: 320
+expect_end:
+  balances:
+  - {team: research, period: 2026-11, spent_micro: 640, held_micro: 0}
+  ledger_entries: 4
+  cache_entries: {research: 1}
+  reconcile: clean
+  report:
+  - {date: '2026-11-02', team: research, requests: 4, ok: 4, cache_hits: 2, attempts: 2, cost_micro: 640, avoided_micro: 640}

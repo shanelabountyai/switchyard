@@ -1,0 +1,74 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c10-budget-allow-flag
+kind: sequential
+illustrative: true
+description: allow_with_flag over the hard limit, then refused at the cap.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  research:
+    budget: {period: calendar_month_utc, soft_limit_micro: 8000, hard_limit_micro: 10000, overage: allow_with_flag, overage_cap_micro: 2000}
+    cache: {enabled: false, ttl_ms: 60000}
+covers: [WE-20, WE-21]
+opening:
+- {team: research, amount_micro: 9950, memo: illustrative opening balance}
+scripts: {}
+requests:
+- we: WE-20
+  at_ms: 0
+  fake_output_tokens: 150
+  request:
+    request_id: r1
+    team: research
+    app: nb
+    use_case: notes
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative note text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: bypass_team_opt_out
+    attempts:
+    - {model: alder-small, started_ms: 0, finished_ms: 400, outcome: ok, reserved_micro: 360, cost_micro: 320}
+    events: []
+    flags: [over_hard_limit, soft_limit_crossed]
+    cost_micro: 320
+    balance_after: {spent_micro: 10270, held_micro: 0}
+- we: WE-21
+  at_ms: 1000
+  request:
+    request_id: r2
+    team: research
+    app: nb
+    use_case: notes
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative note text}
+    input_tokens: 4000
+    max_output_tokens: 1200
+    temperature: '0'
+  expect:
+    status: denied_budget
+    rule: default
+    chain: [alder-small, birch-small]
+    cache: bypass_team_opt_out
+    route_reasons: ['rule_matched:default', 'limits_applied:default', 'candidate:alder-small', 'candidate:birch-small',
+      'excluded_cost:alder-medium', 'excluded_cost:birch-medium', 'chosen:alder-small']
+    attempts: []
+    events: ['budget_refused:1760']
+    flags: []
+    cost_micro: 0
+    balance_after: {spent_micro: 10270, held_micro: 0}
+expect_end:
+  balances:
+  - {team: research, period: 2026-11, spent_micro: 10270, held_micro: 0}
+  ledger_entries: 3
+  reconcile: clean

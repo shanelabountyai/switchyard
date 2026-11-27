@@ -1,0 +1,47 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c09-budget-downgrade-denied
+kind: sequential
+illustrative: true
+description: downgrade with no lower tier that fits.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  support:
+    budget: {period: calendar_month_utc, soft_limit_micro: 8000, hard_limit_micro: 10000, overage: downgrade, overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+covers: [WE-19]
+opening:
+- {team: support, amount_micro: 9700, memo: illustrative opening balance}
+scripts: {}
+requests:
+- we: WE-19
+  at_ms: 0
+  fake_output_tokens: 350
+  request:
+    request_id: r1
+    team: support
+    app: helpdesk
+    use_case: reply-draft
+    task_class: draft
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative reply request}
+    input_tokens: 800
+    max_output_tokens: 400
+    temperature: '0'
+  expect:
+    status: denied_budget
+    rule: support-reply
+    chain: [alder-medium, birch-medium]
+    cache: bypass_team_opt_out
+    attempts: []
+    events: ['budget_refused:4800', downgrade_chain, 'budget_refused:480', 'budget_refused:600']
+    flags: []
+    cost_micro: 0
+    balance_after: {spent_micro: 9700, held_micro: 0}
+expect_end:
+  balances:
+  - {team: support, period: 2026-11, spent_micro: 9700, held_micro: 0}
+  ledger_entries: 1
+  reconcile: clean

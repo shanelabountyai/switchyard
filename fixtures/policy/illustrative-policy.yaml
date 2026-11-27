@@ -1,0 +1,20 @@
+# ILLUSTRATIVE routing policy (PRD 3.4, 3.5). Rules are checked in file order; the first match wins.
+# The engine block holds the defaults used in the worked examples. They are not recommendations.
+illustrative: true
+rules:
+  - {id: support-triage, team: support, app: helpdesk, use_case: triage, task_class: classify,
+     tiers: [economy], max_latency_ms: 1000, max_cost_micro: 500, min_tier: economy}
+  - {id: support-reply, team: support, app: "*", use_case: reply-draft, task_class: draft,
+     tiers: [standard, premium], max_latency_ms: 3000, max_cost_micro: 20000, min_tier: economy}
+  - {id: legal-review, team: legal, app: "*", use_case: contract-review, task_class: reason,
+     tiers: [premium], max_latency_ms: 5000, max_cost_micro: 200000, min_tier: premium}
+  - {id: default, team: "*", app: "*", use_case: "*", task_class: "*",
+     tiers: [economy, standard], max_latency_ms: 2000, max_cost_micro: 5000, min_tier: economy}
+engine:
+  max_attempts: 3
+  max_retries_per_provider: 1
+  backoff_ms: 200
+  breaker: {window_ms: 30000, min_calls: 4, failure_rate_pct: 50, open_ms: 10000}
+  retry_budget: {window_ms: 10000, ratio_pct: 20, min_retries: 1}
+  reservation_ttl_ms: 600000
+  cache_max_entries: 10000

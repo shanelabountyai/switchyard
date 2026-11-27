@@ -1,0 +1,166 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c01-routing-basics
+kind: sequential
+illustrative: true
+description: Rule matching, clearance, cost and latency exclusions, no route, and the ceiling rule.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  support:
+    budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000, overage: deny,
+      overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+  marketing:
+    budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000, overage: deny,
+      overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+  legal:
+    budget: {period: calendar_month_utc, soft_limit_micro: 1000000000000, hard_limit_micro: 1000000000000, overage: deny,
+      overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+covers: [WE-01, WE-02, WE-03, WE-04, WE-05]
+opening: []
+scripts: {}
+requests:
+- we: WE-01
+  at_ms: 0
+  fake_output_tokens: 12
+  request:
+    request_id: we01
+    team: support
+    app: helpdesk
+    use_case: triage
+    task_class: classify
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative ticket text 1}
+    input_tokens: 400
+    max_output_tokens: 50
+    temperature: '0'
+  expect:
+    status: ok
+    rule: support-triage
+    chain: [alder-small, birch-small]
+    cache: bypass_team_opt_out
+    route_reasons: ['rule_matched:support-triage', 'limits_applied:support-triage', 'candidate:alder-small', 'candidate:birch-small',
+      'chosen:alder-small']
+    attempts:
+    - {model: alder-small, started_ms: 0, finished_ms: 400, outcome: ok, reserved_micro: 120, cost_micro: 90}
+    events: []
+    flags: []
+    cost_micro: 90
+- we: WE-02
+  at_ms: 1000
+  fake_output_tokens: 150
+  request:
+    request_id: we02
+    team: marketing
+    app: site
+    use_case: blurb
+    task_class: summarize
+    data_tags: [pii]
+    messages:
+    - {role: user, content: Illustrative blurb text}
+    input_tokens: 1000
+    max_output_tokens: 200
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, alder-medium]
+    cache: bypass_sensitive
+    route_reasons: ['rule_matched:default', 'limits_applied:default', 'candidate:alder-small', 'excluded_not_cleared:birch-small',
+      'candidate:alder-medium', 'excluded_not_cleared:birch-medium', 'chosen:alder-small']
+    attempts:
+    - {model: alder-small, started_ms: 1000, finished_ms: 1400, outcome: ok, reserved_micro: 360, cost_micro: 320}
+    events: []
+    flags: []
+    cost_micro: 320
+- we: WE-03
+  at_ms: 2000
+  fake_output_tokens: 900
+  request:
+    request_id: we03
+    team: support
+    app: helpdesk
+    use_case: reply-draft
+    task_class: draft
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative reply request}
+    input_tokens: 3000
+    max_output_tokens: 1500
+    temperature: '0'
+  expect:
+    status: ok
+    rule: support-reply
+    chain: [alder-medium]
+    cache: bypass_team_opt_out
+    route_reasons: ['rule_matched:support-reply', 'limits_applied:support-reply', 'candidate:alder-medium', 'excluded_cost:birch-medium',
+      'excluded_cost:alder-large', 'excluded_cost:cedar-large', 'chosen:alder-medium']
+    attempts:
+    - {model: alder-medium, started_ms: 2000, finished_ms: 2900, outcome: ok, reserved_micro: 18000, cost_micro: 13200}
+    events: []
+    flags: []
+    cost_micro: 13200
+- we: WE-04
+  at_ms: 3000
+  request:
+    request_id: we04
+    team: legal
+    app: clm
+    use_case: contract-review
+    task_class: reason
+    data_tags: [restricted]
+    messages:
+    - {role: user, content: Illustrative contract text}
+    input_tokens: 20000
+    max_output_tokens: 2000
+    temperature: '0'
+    max_latency_ms: 2000
+  expect:
+    status: no_route
+    rule: legal-review
+    chain: []
+    cache: not_checked
+    route_reasons: ['rule_matched:legal-review', 'limits_applied:legal-review', 'excluded_not_cleared:alder-large', 'excluded_latency:cedar-large',
+      'no_eligible_model:legal-review']
+    attempts: []
+    events: []
+    flags: []
+    cost_micro: 0
+- we: WE-05
+  at_ms: 4000
+  fake_output_tokens: 57
+  request:
+    request_id: we05
+    team: marketing
+    app: site
+    use_case: blurb
+    task_class: summarize
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative blurb text 2}
+    input_tokens: 1234
+    max_output_tokens: 100
+    temperature: '0'
+  expect:
+    status: ok
+    rule: default
+    chain: [alder-small, birch-small, alder-medium, birch-medium]
+    cache: bypass_team_opt_out
+    route_reasons: ['rule_matched:default', 'limits_applied:default', 'candidate:alder-small', 'candidate:birch-small',
+      'candidate:alder-medium', 'candidate:birch-medium', 'chosen:alder-small']
+    attempts:
+    - {model: alder-small, started_ms: 4000, finished_ms: 4400, outcome: ok, reserved_micro: 327, cost_micro: 293}
+    events: []
+    flags: []
+    cost_micro: 293
+expect_end:
+  balances:
+  - {team: support, period: 2026-11, spent_micro: 13290, held_micro: 0}
+  - {team: marketing, period: 2026-11, spent_micro: 613, held_micro: 0}
+  - {team: legal, period: 2026-11, spent_micro: 0, held_micro: 0}
+  ledger_entries: 8
+  reconcile: clean

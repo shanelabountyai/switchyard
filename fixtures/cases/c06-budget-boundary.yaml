@@ -1,0 +1,48 @@
+# ILLUSTRATIVE golden case. Fictional providers, made-up prices. Expected values are from PRD section 11.
+id: c06-budget-boundary
+kind: sequential
+illustrative: true
+description: A reserve that lands exactly on the hard limit is accepted.
+start_at: '2026-11-02T09:00:00.000Z'
+catalog: ../catalog/illustrative-catalog.yaml
+policy: ../policy/illustrative-policy.yaml
+teams:
+  support:
+    budget: {period: calendar_month_utc, soft_limit_micro: 8000, hard_limit_micro: 10000, overage: deny, overage_cap_micro: 0}
+    cache: {enabled: false, ttl_ms: 60000}
+covers: [WE-16]
+opening:
+- {team: support, amount_micro: 9880, memo: illustrative opening balance}
+scripts: {}
+requests:
+- we: WE-16
+  at_ms: 0
+  fake_output_tokens: 12
+  request:
+    request_id: r1
+    team: support
+    app: helpdesk
+    use_case: triage
+    task_class: classify
+    data_tags: []
+    messages:
+    - {role: user, content: Illustrative ticket text 1}
+    input_tokens: 400
+    max_output_tokens: 50
+    temperature: '0'
+  expect:
+    status: ok
+    rule: support-triage
+    chain: [alder-small, birch-small]
+    cache: bypass_team_opt_out
+    attempts:
+    - {model: alder-small, started_ms: 0, finished_ms: 400, outcome: ok, reserved_micro: 120, cost_micro: 90}
+    events: []
+    flags: [soft_limit_crossed]
+    cost_micro: 90
+    balance_after: {spent_micro: 9970, held_micro: 0}
+expect_end:
+  balances:
+  - {team: support, period: 2026-11, spent_micro: 9970, held_micro: 0}
+  ledger_entries: 3
+  reconcile: clean

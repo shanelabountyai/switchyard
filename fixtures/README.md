@@ -4,8 +4,7 @@ Everything in this folder is **illustrative**. The providers (`alder`, `birch`, 
 prices, latencies, token counts and budgets are made up so the examples are easy to follow. None of it describes
 a real vendor.
 
-Only this README exists on the `prd` branch. Phase 1 creates the data files it describes
-(`docs/switchyard/PHASE-1-PLAN.md`).
+The data files below were created in Phase 1 from the tables in PRD sections 3 and 11.
 
 ## Files
 
@@ -133,6 +132,8 @@ Rules for the file:
   present for WE-01 to WE-05, WE-18 and WE-21.
 - Every money value is a whole number of micro-dollars. A float anywhere in a case file is a load error.
 - `expect_end.reconcile: clean` is required in every sequential case.
+- Optional `expect.event_times` lists each event's `at_ms` after `start_at`, in order (c02, c03). Optional
+  `expect_end.report_rows` is the number of report rows (D-037).
 
 ### Kind `interleaved`
 
